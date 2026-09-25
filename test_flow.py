@@ -10,6 +10,7 @@ import grpc
 
 import taskflow_pb2 as pb
 import taskflow_pb2_grpc
+from interceptors import HeaderInterceptor
 
 PORT = 50061  # port dédié aux tests : ne gêne pas un serveur de démo déjà lancé
 T = 3         # timeout des appels
@@ -119,10 +120,17 @@ def run_tests(stub, log_path):
     print("TODO(24) ok")
 
     # --- TODO(25) : Étape 5 — metadata x-user ---
-    # Le stdout du serveur est écrit dans log_path. Vérifiez qu'il contient
-    # "user=testeur" (metadata ajouté par HeaderInterceptor) et une ligne
-    # avec code=NOT_FOUND (produite par LoggingInterceptor).
-    pass
+    # Le stdout du serveur est écrit dans log_path (LoggingInterceptor logge
+    # avec flush=True : tout est déjà dans le fichier à cet instant).
+    with open(log_path, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    assert any("user=testeur" in line for line in lines), \
+        "aucune ligne user=testeur : HeaderInterceptor n'est pas branché"
+    # le Subscribe du TODO(24) passe par un channel sans intercepteur : il
+    # apparaît avec user=- , c'est attendu.
+    assert any("code=NOT_FOUND" in line for line in lines), \
+        "aucune ligne code=NOT_FOUND dans le log du serveur"
+    print("TODO(25) ok")
 
 
 def main():
@@ -132,7 +140,7 @@ def main():
     channel = grpc.insecure_channel(f"localhost:{PORT}")
     try:
         grpc.channel_ready_future(channel).result(timeout=10)  # attend le serveur
-        # Étape 5 : channel = grpc.intercept_channel(channel, HeaderInterceptor("testeur"))
+        channel = grpc.intercept_channel(channel, HeaderInterceptor("testeur"))
         run_tests(taskflow_pb2_grpc.TaskFlowStub(channel), log.name)
         print("✅ Tous les tests passent.")
     finally:
