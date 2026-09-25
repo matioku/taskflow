@@ -11,6 +11,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 
 import taskflow_pb2
 import taskflow_pb2_grpc
+from interceptors import LoggingInterceptor
 
 _STOP = object()  # sentinelle : sert à débloquer q.get() (voir TODO 8)
 
@@ -234,8 +235,8 @@ def serve():
 
     # Chaque RPC en cours occupe un thread du pool ; un abonné Subscribe
     # en occupe un EN PERMANENCE -> prévoir large.
-    # Étape 5 : ajouter interceptors=[LoggingInterceptor()]
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=32))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=32),
+                         interceptors=[LoggingInterceptor()])
     taskflow_pb2_grpc.add_TaskFlowServicer_to_server(TaskFlowService(args.slow), server)
     server.add_insecure_port(f"[::]:{args.port}")
     server.start()

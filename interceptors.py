@@ -28,9 +28,78 @@ import grpc
 #   4. code : context.code() (None = OK ; exception non-abort = UNKNOWN)
 #   5. user : dict(handler_call_details.invocation_metadata).get("x-user")
 #   Pensez à print(..., flush=True).
+def _final_code(context, failed):
+    code = context.code()
+    if code is not None:          # abort() a fixé le code
+        return code.name
+    if failed:                    # exception Python qui n'est pas un abort
+        return "UNKNOWN"
+    if not context.is_active():   # le client est déjà parti
+        remaining = context.time_remaining()
+        if remaining is not None and remaining <= 0:
+            return "DEADLINE_EXCEEDED"
+        return "CANCELLED"
+    return "OK"
+
+
 class LoggingInterceptor(grpc.ServerInterceptor):
     def intercept_service(self, continuation, handler_call_details):
-        raise NotImplementedError()
+        handler = continuation(handler_call_details)
+        if handler is None:
+            return None
+
+        method = handler_call_details.method
+        metadata = dict(handler_call_details.invocation_metadata or ())
+        user = metadata.get("x-user", "-")
+
+        def log(context, start, failed):
+            ms = (time.perf_counter() - start) * 1000
+            print(f"[{datetime.now():%H:%M:%S}] {method}  duration={ms:.0f}ms  "
+                  f"code={_final_code(context, failed)}  user={user}", flush=True)
+
+        # réponse unique (unary_unary, stream_unary) : on chronomètre l'appel
+        def wrap_unary_response(behavior):
+            def wrapper(request_or_iterator, context):
+                start = time.perf_counter()
+                failed = False
+                try:
+                    return behavior(request_or_iterator, context)
+                except Exception:
+                    failed = True
+                    raise
+                finally:
+                    log(context, start, failed)
+            return wrapper
+
+        # réponse en flux (unary_stream, stream_stream) : le RPC n'est fini
+        # qu'une fois le flux consommé, donc wrapper générateur
+        def wrap_stream_response(behavior):
+            def wrapper(request_or_iterator, context):
+                start = time.perf_counter()
+                failed = False
+                try:
+                    yield from behavior(request_or_iterator, context)
+                except Exception:
+                    failed = True
+                    raise
+                finally:
+                    log(context, start, failed)
+            return wrapper
+
+        des, ser = handler.request_deserializer, handler.response_serializer
+        if handler.unary_unary:
+            return grpc.unary_unary_rpc_method_handler(
+                wrap_unary_response(handler.unary_unary), des, ser)
+        if handler.stream_unary:
+            return grpc.stream_unary_rpc_method_handler(
+                wrap_unary_response(handler.stream_unary), des, ser)
+        if handler.unary_stream:
+            return grpc.unary_stream_rpc_method_handler(
+                wrap_stream_response(handler.unary_stream), des, ser)
+        if handler.stream_stream:
+            return grpc.stream_stream_rpc_method_handler(
+                wrap_stream_response(handler.stream_stream), des, ser)
+        return handler
 
 
 # ---------- TODO(23) ---------- (membre A)
