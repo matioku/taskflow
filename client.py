@@ -84,10 +84,12 @@ def main():
                         help="filtre, ex: CREATED,DELETED (vide = tout)")
     parser.add_argument("--no-listen", action="store_true")
     parser.add_argument("--timeout", type=float, default=3, help="bonus B1")
+    parser.add_argument("--token", help="bonus B5 (serveur lancé avec --auth)")
     args = parser.parse_args()
 
     channel = grpc.insecure_channel(f"{args.host}:{args.port}")
-    channel = grpc.intercept_channel(channel, HeaderInterceptor(args.user))
+    channel = grpc.intercept_channel(channel,
+                                     HeaderInterceptor(args.user, args.token))
     stub = taskflow_pb2_grpc.TaskFlowStub(channel)
     T = args.timeout  # à passer en timeout=T sur TOUS les appels (sauf Subscribe)
 

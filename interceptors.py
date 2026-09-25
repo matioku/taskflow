@@ -1,5 +1,6 @@
 # interceptors.py
 import collections
+import threading
 import time
 from datetime import datetime
 
@@ -28,6 +29,9 @@ import grpc
 #   4. code : context.code() (None = OK ; exception non-abort = UNKNOWN)
 #   5. user : dict(handler_call_details.invocation_metadata).get("x-user")
 #   Pensez à print(..., flush=True).
+_print_lock = threading.Lock()  # sinon deux RPC en parallèle mélangent leurs lignes
+
+
 def _final_code(context, failed):
     code = context.code()
     if code is not None:          # abort() a fixé le code
@@ -54,8 +58,10 @@ class LoggingInterceptor(grpc.ServerInterceptor):
 
         def log(context, start, failed):
             ms = (time.perf_counter() - start) * 1000
-            print(f"[{datetime.now():%H:%M:%S}] {method}  duration={ms:.0f}ms  "
-                  f"code={_final_code(context, failed)}  user={user}", flush=True)
+            line = (f"[{datetime.now():%H:%M:%S}] {method}  duration={ms:.0f}ms  "
+                    f"code={_final_code(context, failed)}  user={user}")
+            with _print_lock:
+                print(line, flush=True)
 
         # réponse unique (unary_unary, stream_unary) : on chronomètre l'appel
         def wrap_unary_response(behavior):
@@ -102,6 +108,47 @@ class LoggingInterceptor(grpc.ServerInterceptor):
         return handler
 
 
+# ---------- Bonus B5 ---------- (membre B)
+# AuthInterceptor (serveur) : vérifie le metadata x-token avant le RPC.
+#   pas de token -> UNAUTHENTICATED
+#   token qui n'est pas celui de x-user -> PERMISSION_DENIED
+# Pour refuser, on renvoie un handler du MÊME type que l'original (sinon gRPC
+# se trompe sur le format des messages) dont la fonction fait juste abort.
+def _refusing_handler(handler, code, details):
+    def refuse(request_or_iterator, context):
+        context.abort(code, details)
+
+    des, ser = handler.request_deserializer, handler.response_serializer
+    if handler.unary_unary:
+        return grpc.unary_unary_rpc_method_handler(refuse, des, ser)
+    if handler.stream_unary:
+        return grpc.stream_unary_rpc_method_handler(refuse, des, ser)
+    if handler.unary_stream:
+        return grpc.unary_stream_rpc_method_handler(refuse, des, ser)
+    return grpc.stream_stream_rpc_method_handler(refuse, des, ser)
+
+
+class AuthInterceptor(grpc.ServerInterceptor):
+    def __init__(self, tokens: dict):
+        self._tokens = tokens  # utilisateur -> token
+
+    def intercept_service(self, continuation, handler_call_details):
+        handler = continuation(handler_call_details)
+        if handler is None:
+            return None
+
+        metadata = dict(handler_call_details.invocation_metadata or ())
+        user = metadata.get("x-user")
+        token = metadata.get("x-token")
+        if not token:
+            return _refusing_handler(handler, grpc.StatusCode.UNAUTHENTICATED,
+                                     "missing x-token")
+        if user is None or self._tokens.get(user) != token:
+            return _refusing_handler(handler, grpc.StatusCode.PERMISSION_DENIED,
+                                     f"invalid token for {user}")
+        return handler
+
+
 # ---------- TODO(23) ---------- (membre A)
 class _ClientCallDetails(
         collections.namedtuple(
@@ -116,13 +163,17 @@ class HeaderInterceptor(grpc.UnaryUnaryClientInterceptor,
                         grpc.UnaryStreamClientInterceptor,
                         grpc.StreamUnaryClientInterceptor,
                         grpc.StreamStreamClientInterceptor):
-    def __init__(self, user: str):
+    def __init__(self, user: str, token: str | None = None):
         self._user = user
+        self._token = token  # bonus B5
 
     def _with_user(self, details: grpc.ClientCallDetails) -> _ClientCallDetails:
-        """Recopie les détails d'appel en y ajoutant le metadata x-user."""
+        """Recopie les détails d'appel en y ajoutant le metadata x-user
+        (et x-token s'il y en a un, bonus B5)."""
         metadata = list(details.metadata or [])
         metadata.append(("x-user", self._user))
+        if self._token:
+            metadata.append(("x-token", self._token))
         return _ClientCallDetails(details.method, details.timeout, metadata,
                                   details.credentials, details.wait_for_ready,
                                   details.compression)

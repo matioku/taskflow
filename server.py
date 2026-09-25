@@ -11,7 +11,7 @@ from google.protobuf.timestamp_pb2 import Timestamp
 
 import taskflow_pb2
 import taskflow_pb2_grpc
-from interceptors import LoggingInterceptor
+from interceptors import AuthInterceptor, LoggingInterceptor
 
 _STOP = object()  # sentinelle : sert à débloquer q.get() (voir TODO 8)
 
@@ -227,16 +227,32 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
                 q.put(event)
 
 
+# bonus B5 : tokens de démo (utilisateur -> token). En vrai ils viendraient
+# d'une base ou d'un fichier de secrets, pas du code.
+DEMO_TOKENS = {
+    "alice": "tok-alice",
+    "bob": "tok-bob",
+    "carol": "tok-carol",
+}
+
+
 def serve():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=50051)
     parser.add_argument("--slow", action="store_true", help="bonus B1")
+    parser.add_argument("--auth", action="store_true",
+                        help="bonus B5 : exige le metadata x-token")
     args = parser.parse_args()
+
+    # Logging en premier : il voit aussi les appels refusés par AuthInterceptor
+    interceptors = [LoggingInterceptor()]
+    if args.auth:
+        interceptors.append(AuthInterceptor(DEMO_TOKENS))
 
     # Chaque RPC en cours occupe un thread du pool ; un abonné Subscribe
     # en occupe un EN PERMANENCE -> prévoir large.
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=32),
-                         interceptors=[LoggingInterceptor()])
+                         interceptors=interceptors)
     taskflow_pb2_grpc.add_TaskFlowServicer_to_server(TaskFlowService(args.slow), server)
     server.add_insecure_port(f"[::]:{args.port}")
     server.start()

@@ -23,6 +23,8 @@ python test_flow.py                      # tests de bout en bout (port 50061)
 
 Le branchement du `HeaderInterceptor` dans `client.py` a été fait par TM
 (c'est son fichier), celui de `test_flow.py` par MA avec le TODO(25).
+Bonus : B1 par MA, B5 par TM (qui a ajouté pour ça un paramètre `token`
+optionnel au `HeaderInterceptor` de MA).
 
 ## Validation
 
@@ -35,6 +37,7 @@ Le branchement du `HeaderInterceptor` dans `client.py` a été fait par TM
 | 23 | `interceptors.py` (`HeaderInterceptor`) | MA | TM |
 | 25 | `test_flow.py` | MA | TM |
 | B1 | `server.py --slow` / `client.py --timeout` | MA | TM |
+| B5 | `AuthInterceptor`, `server.py --auth`, `client.py --token` | TM | en attente (MA) |
 
 ### Code de B validé par MA — 2026-09-25 (revue + exécution)
 
@@ -147,6 +150,42 @@ handler continue, enregistre la tâche et publie `CREATED`, c'est juste la
 réponse qui est jetée. Pour l'éviter il faudrait vérifier `context.is_active()`
 avant d'écrire, ou rendre la création idempotente pour que le client puisse
 réessayer sans créer de doublon.
+
+## Bonus B5 — Authentification
+
+```bash
+python server.py --auth
+python client.py --user alice --token tok-alice
+```
+
+- `AuthInterceptor` (serveur, dans `interceptors.py`) lit `x-token` dans le
+  metadata. Pas de token → `UNAUTHENTICATED`. Token qui n'est pas celui de
+  `x-user` (token faux, ou token d'un autre utilisateur) → `PERMISSION_DENIED`.
+  On ne peut donc pas se faire passer pour quelqu'un d'autre en changeant juste
+  `--user`.
+- Tokens de démo dans `server.py` (`DEMO_TOKENS`) : `alice`/`tok-alice`,
+  `bob`/`tok-bob`, `carol`/`tok-carol`.
+- Côté client, `HeaderInterceptor(user, token)` ajoute aussi `x-token` quand un
+  token est donné (option `--token`).
+- Dans `intercept_service` on n'a pas encore de `context`, donc on ne peut pas
+  faire `abort` directement : on renvoie un handler du même type que l'original
+  (unary ou stream) dont la fonction fait juste `context.abort(...)`.
+- `LoggingInterceptor` est avant `AuthInterceptor` dans la liste, donc les refus
+  apparaissent aussi dans le log :
+
+```
+[16:43:07] /taskflow.TaskFlow/CreateTask  duration=0ms  code=UNAUTHENTICATED  user=alice
+[16:43:07] /taskflow.TaskFlow/CreateTask  duration=0ms  code=PERMISSION_DENIED  user=bob
+[16:43:07] /taskflow.TaskFlow/Subscribe  duration=0ms  code=UNAUTHENTICATED  user=bob
+```
+
+- Testé sur les 3 types de RPC (unary, server streaming, client streaming) et
+  sur `Subscribe`. Sans `--auth` rien ne change (la démo et `test_flow.py`
+  marchent pareil).
+- Limite : les tokens sont en clair dans le code et le channel n'est pas
+  chiffré (`insecure_channel`), donc quelqu'un qui écoute le réseau peut voler
+  un token. En vrai il faudrait TLS et des tokens stockés ailleurs (ou des JWT
+  signés).
 
 ## Questions de compréhension
 
