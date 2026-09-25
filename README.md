@@ -37,7 +37,7 @@ optionnel au `HeaderInterceptor` de MA).
 | 23 | `interceptors.py` (`HeaderInterceptor`) | MA | TM |
 | 25 | `test_flow.py` | MA | TM |
 | B1 | `server.py --slow` / `client.py --timeout` | MA | TM |
-| B5 | `AuthInterceptor`, `server.py --auth`, `client.py --token` | TM | en attente (MA) |
+| B5 | `AuthInterceptor`, `server.py --auth`, `client.py --token` | TM | MA |
 
 ### Code de B validé par MA — 2026-09-25 (revue + exécution)
 
@@ -53,6 +53,13 @@ optionnel au `HeaderInterceptor` de MA).
   `x-user` (`-` si le channel n'est pas intercepté, cas du `Subscribe` du
   TODO 24), code correct sur erreur (`NOT_FOUND`) et en fin de flux
   (`CANCELLED`), durée mesurée jusqu'à l'épuisement du flux.
+- B5 (`AuthInterceptor`) : `server.py --auth` puis `client.py --user alice`
+  → `UNAUTHENTICATED: missing x-token`, `--token tok-bob` →
+  `PERMISSION_DENIED: invalid token for alice`, `--token tok-alice` → OK
+  (unary, server streaming, client streaming et `Subscribe`). Le refus passe
+  par un handler du même type que l'original, donc les appels bloqués
+  apparaissent aussi dans le log avec le bon code. Sans `--auth`, aucun
+  changement : `test_flow.py` passe toujours.
 
 ### Code de A validé par TM — 2026-09-25 (revue + exécution)
 
